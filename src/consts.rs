@@ -8,7 +8,7 @@ pub const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PK
 pub const UPDATE_REPO: &str = "auxbh/takure-auto-update-test";
 
 #[cfg(feature = "autoupdate")]
-pub const UPDATE_MANIFEST_URL: &str = "https://github.com/auxbh/takure-auto-update-test";
+pub const UPDATE_MANIFEST_URL: &str = "https://auxbh.github.io/takure-auto-update-test/update.json";
 
 #[cfg(feature = "autoupdate")]
 pub const PUBLIC_KEY: [u8; 270] = [
