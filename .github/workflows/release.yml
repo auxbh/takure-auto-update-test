@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Add build targets
+        run: |
+          rustup target add i686-pc-windows-msvc
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Locate signtool and add to PATH
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match "x64" } |
+            Select-Object -First 1 -ExpandProperty DirectoryName
+          if (-not $signtool) {
+            throw "signtool.exe not found"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $signtool
+
+      - name: Decode signing certificate
+        shell: pwsh
+        run: |
+          $bytes = [Convert]::FromBase64String("${{ secrets.TAKURE_SIGNING_KEY_PFX_BASE64 }}")
+          [IO.File]::WriteAllBytes("takure_signing.pfx", $bytes)
+
+      - name: Build, sign and package
+        env:
+          TAKURE_SIGNING_KEY_PASSWORD: ${{ secrets.TAKURE_SIGNING_KEY_PASSWORD }}
+        run: python release.py
+
+      - name: Remove signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue takure_signing.pfx
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/takure_32.zip
+            dist/takure_64.zip
+          generate_release_notes: true
+
+      - name: Prepare Pages artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path pages | Out-Null
+          Copy-Item dist/update.json pages/update.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

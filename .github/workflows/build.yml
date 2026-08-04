@@ -1,0 +1,52 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    name: Build (${{ matrix.name }})
+
+    strategy:
+      matrix:
+        include:
+          - name: win-32
+            target: i686-pc-windows-msvc
+            artifact_name: takure_32
+          - name: win-64
+            target: x86_64-pc-windows-msvc
+            artifact_name: takure_64
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+          key: ${{ matrix.target }}
+
+    - name: Add build target
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Build
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Copy .toml file
+      run: cp takure.toml target/${{ matrix.target }}/release/
+
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: |
+          target/${{ matrix.target }}/release/takure.dll
+          target/${{ matrix.target }}/release/takure.toml

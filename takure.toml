@@ -1,0 +1,21 @@
+[general]
+# Set to 'false' to disable the hook
+enable = true
+# Timeout for web requests, in milliseconds
+timeout = 3000
+# Set to 'false' to disable automatic updates
+auto_update = true
+
+[cards]
+# Card numbers that should be whitelisted
+# If this is empty, all cards will be whitelisted
+# E004 format for non-amusement IC, 012E format for amusement IC, should be in single quotes and separated by commas
+# Example: whitelist = ['E004000000', '012E000001']
+whitelist = []
+
+[tachi]
+# Tachi instance base URL
+base_url = 'https://kamai.tachi.ac/'
+
+# Your Tachi API key
+api_key = 'your-key-here'
