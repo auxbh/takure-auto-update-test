@@ -66,7 +66,7 @@ jobs:
         run: Remove-Item -Force -ErrorAction SilentlyContinue takure_signing.pfx
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/takure_32.zip
@@ -80,10 +80,10 @@ jobs:
           Copy-Item dist/update.json pages/update.json
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: pages
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
