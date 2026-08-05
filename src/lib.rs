@@ -123,6 +123,14 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             init_logger();
             print_infos();
 
+            // avs_ea3_boot_startup_hook fires once, very early during game boot, so the
+            // hook must be enabled immediately and synchronously — it can't wait on a
+            // background thread or a network round-trip, or the game may call the
+            // original unhooked function before we ever get to it.
+            if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
+                error!("{:#}", err);
+            }
+
             #[cfg(feature = "autoupdate")]
             {
                 let library_handle = unsafe { LibraryHandle::new(dll_module) };
@@ -148,18 +156,7 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                             }
                         }
                     }
-
-                    if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                        error!("{:#}", err);
-                    }
                 });
-            }
-
-            #[cfg(not(feature = "autoupdate"))]
-            {
-                if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                    error!("{:#}", err);
-                }
             }
         }
         DLL_PROCESS_DETACH => {
