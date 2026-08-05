@@ -8,8 +8,10 @@ mod takure;
 mod types;
 mod updater;
 
+#[cfg(feature = "autoupdate")]
 use std::thread;
 
+#[cfg(feature = "autoupdate")]
 use crate::helpers::{LibraryHandle, ThreadHandle};
 use crate::log::Logger;
 use crate::takure::{hook_init, hook_release};
@@ -119,23 +121,21 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
         DLL_PROCESS_ATTACH => {
             unsafe { AllocConsole() };
             init_logger();
+            print_infos();
 
-            #[cfg_attr(not(feature = "autoupdate"), allow(unused_variables))]
-            let library_handle = unsafe { LibraryHandle::new(dll_module) };
-            let thread_handle = ThreadHandle::duplicate_current_thread_handle();
+            #[cfg(feature = "autoupdate")]
+            {
+                let library_handle = unsafe { LibraryHandle::new(dll_module) };
+                let thread_handle = ThreadHandle::duplicate_current_thread_handle();
 
-            thread::spawn(move || {
-                // Wait until DllMain returns and the loader lock is released before
-                // doing any real work, otherwise self-updating (which needs to spawn
-                // its own thread and touch the filesystem) can deadlock.
-                if let Ok(h) = thread_handle {
-                    h.wait_and_close(1000);
-                }
+                thread::spawn(move || {
+                    // Wait until DllMain returns and the loader lock is released before
+                    // self-updating, since it needs to spawn its own thread and touch
+                    // the filesystem, which can deadlock while the loader lock is held.
+                    if let Ok(h) = thread_handle {
+                        h.wait_and_close(1000);
+                    }
 
-                print_infos();
-
-                #[cfg(feature = "autoupdate")]
-                {
                     if CONFIGURATION.general.auto_update {
                         match updater::self_update(&library_handle) {
                             Ok(true) => {
@@ -148,12 +148,19 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                             }
                         }
                     }
-                }
 
+                    if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
+                        error!("{:#}", err);
+                    }
+                });
+            }
+
+            #[cfg(not(feature = "autoupdate"))]
+            {
                 if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
                     error!("{:#}", err);
                 }
-            });
+            }
         }
         DLL_PROCESS_DETACH => {
             if let Err(err) = crochet::disable!(avs_ea3_boot_startup_hook) {

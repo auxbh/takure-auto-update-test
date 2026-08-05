@@ -18,11 +18,13 @@ use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentThread};
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winnt::SYNCHRONIZE;
 
+#[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
 pub struct ThreadHandle(HANDLE);
 
 unsafe impl Send for ThreadHandle {}
 unsafe impl Sync for ThreadHandle {}
 impl ThreadHandle {
+    #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
     pub fn duplicate_current_thread_handle() -> Result<Self, u32> {
         unsafe {
             let mut cur_thread = ptr::null_mut();
@@ -44,6 +46,7 @@ impl ThreadHandle {
         }
     }
 
+    #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
     pub fn wait_and_close(self, ms: u32) {
         unsafe {
             WaitForSingleObject(self.0, ms);
@@ -58,6 +61,7 @@ pub struct LibraryHandle(HINSTANCE);
 unsafe impl Send for LibraryHandle {}
 unsafe impl Sync for LibraryHandle {}
 impl LibraryHandle {
+    #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
     pub unsafe fn new(handle: HINSTANCE) -> Self {
         Self(handle)
     }
