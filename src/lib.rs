@@ -12,7 +12,7 @@ mod updater;
 use std::thread;
 
 #[cfg(feature = "autoupdate")]
-use crate::helpers::{LibraryHandle, ThreadHandle};
+use crate::helpers::{consume_reload_as_update_marker, mark_reload_as_update, LibraryHandle, ThreadHandle};
 use crate::log::Logger;
 use crate::takure::{hook_init, hook_release};
 use ::log::{error, info};
@@ -141,8 +141,15 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             // (LoadLibrary, CreateThread-then-LoadLibrary) before returning, so the check
             // itself (network + disk, no LoadLibrary) runs synchronously here, and only the
             // actual swap-and-reload is deferred to a background thread further down.
+            //
+            // If this load is a fresh reload right after applying an update, skip the check
+            // entirely — it already ran and passed before the reload was triggered, and
+            // redoing a network round-trip here would only widen the window where boot can
+            // fire before the hook is back up.
             #[cfg(feature = "autoupdate")]
-            let pending_update = if CONFIGURATION.general.auto_update {
+            let pending_update = if consume_reload_as_update_marker() {
+                None
+            } else if CONFIGURATION.general.auto_update {
                 let library_handle = unsafe { LibraryHandle::new(dll_module) };
 
                 match updater::self_update(&library_handle) {
@@ -169,14 +176,18 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                         // Wait until DllMain returns and the loader lock is released before
                         // applying the update, since it creates a thread and eventually
                         // calls LoadLibraryW, which can deadlock while the loader lock is
-                        // held.
+                        // held. DllMain returns essentially immediately after spawning this
+                        // thread (there's no more work after it), so this only needs to
+                        // cover that brief handoff — every extra millisecond here is time
+                        // the boot hook spends not installed.
                         if let Ok(h) = thread_handle {
-                            h.wait_and_close(1000);
+                            h.wait_and_close(50);
                         }
 
                         match updater::apply_update(&library_handle, &new_path) {
                             Ok(()) => {
                                 info!("Self-update successful. Reloading into new hook...");
+                                mark_reload_as_update();
                                 library_handle.free_and_exit_thread(1);
                             }
                             Err(e) => {

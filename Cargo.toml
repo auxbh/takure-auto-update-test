@@ -21,6 +21,7 @@ winapi = { version = "0.3", features = [
     "minwindef", "windef", "winuser", "libloaderapi", "processthreadsapi",
     "winbase", "consoleapi", "ntdef", "errhandlingapi", "handleapi",
     "synchapi", "heapapi", "memoryapi", "wincrypt", "softpub", "wintrust",
+    "processenv",
 ] }
 crochet = { git = "https://github.com/auxbh/crochet" }
 log = "0.4"

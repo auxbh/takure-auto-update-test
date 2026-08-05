@@ -14,9 +14,40 @@ use winapi::shared::winerror::ERROR_INSUFFICIENT_BUFFER;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::handleapi::{CloseHandle, DuplicateHandle};
 use winapi::um::libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW};
+#[cfg(feature = "autoupdate")]
+use winapi::um::processenv::{GetEnvironmentVariableW, SetEnvironmentVariableW};
 use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentThread};
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winnt::SYNCHRONIZE;
+
+// Set right before triggering a self-update reload, so the freshly reloaded instance can
+// tell it was just placed there by us and skip redoing the (network-bound) update check —
+// that check already ran and passed before this reload was ever triggered. This must ride
+// along as a process environment variable rather than a static: the whole module (and all
+// its statics) is unloaded and reinitialized fresh across the reload, but env vars belong
+// to the process, not the module, so they survive.
+#[cfg(feature = "autoupdate")]
+const JUST_UPDATED_ENV: &str = "TAKURE_JUST_UPDATED";
+
+#[cfg(feature = "autoupdate")]
+pub fn mark_reload_as_update() {
+    let name = U16CString::from_str_truncate(JUST_UPDATED_ENV);
+    let value = U16CString::from_str_truncate("1");
+    unsafe { SetEnvironmentVariableW(name.as_ptr(), value.as_ptr()) };
+}
+
+#[cfg(feature = "autoupdate")]
+pub fn consume_reload_as_update_marker() -> bool {
+    let name = U16CString::from_str_truncate(JUST_UPDATED_ENV);
+    let mut buf = [0u16; 4];
+    let found = unsafe { GetEnvironmentVariableW(name.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) } > 0;
+
+    if found {
+        unsafe { SetEnvironmentVariableW(name.as_ptr(), ptr::null()) };
+    }
+
+    found
+}
 
 #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
 pub struct ThreadHandle(HANDLE);
