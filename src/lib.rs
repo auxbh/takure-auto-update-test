@@ -134,40 +134,71 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             init_logger();
             print_infos();
 
-            // avs_ea3_boot_startup_hook fires once, very early during game boot, so the
-            // hook must be enabled immediately and synchronously — it can't wait on a
-            // background thread or a network round-trip, or the game may call the
-            // original unhooked function before we ever get to it.
-            if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                error!("{:#}", err);
-            }
+            // avs_ea3_boot_startup_hook fires once, very early during game boot, and boot
+            // can't happen before DllMain returns (it runs on the same thread, right after
+            // LoadLibrary), so it's safe to block here on the update check — the game simply
+            // can't race us. What we can't do is touch anything loader-lock-sensitive
+            // (LoadLibrary, CreateThread-then-LoadLibrary) before returning, so the check
+            // itself (network + disk, no LoadLibrary) runs synchronously here, and only the
+            // actual swap-and-reload is deferred to a background thread further down.
+            #[cfg(feature = "autoupdate")]
+            let pending_update = if CONFIGURATION.general.auto_update {
+                let library_handle = unsafe { LibraryHandle::new(dll_module) };
+
+                match updater::self_update(&library_handle) {
+                    Ok(Some(new_path)) => Some((library_handle, new_path)),
+                    Ok(None) => None,
+                    Err(e) => {
+                        error!("Self-update check failed: {e:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             #[cfg(feature = "autoupdate")]
-            {
-                let library_handle = unsafe { LibraryHandle::new(dll_module) };
-                let thread_handle = ThreadHandle::duplicate_current_thread_handle();
+            match pending_update {
+                Some((library_handle, new_path)) => {
+                    // An update is ready to apply — don't enable the hook in this instance,
+                    // since we're about to replace it. If hook_init doesn't run here, there's
+                    // nothing to leave dangling when we unload.
+                    let thread_handle = ThreadHandle::duplicate_current_thread_handle();
 
-                thread::spawn(move || {
-                    // Wait until DllMain returns and the loader lock is released before
-                    // self-updating, since it needs to spawn its own thread and touch
-                    // the filesystem, which can deadlock while the loader lock is held.
-                    if let Ok(h) = thread_handle {
-                        h.wait_and_close(1000);
-                    }
+                    thread::spawn(move || {
+                        // Wait until DllMain returns and the loader lock is released before
+                        // applying the update, since it creates a thread and eventually
+                        // calls LoadLibraryW, which can deadlock while the loader lock is
+                        // held.
+                        if let Ok(h) = thread_handle {
+                            h.wait_and_close(1000);
+                        }
 
-                    if CONFIGURATION.general.auto_update {
-                        match updater::self_update(&library_handle) {
-                            Ok(true) => {
+                        match updater::apply_update(&library_handle, &new_path) {
+                            Ok(()) => {
                                 info!("Self-update successful. Reloading into new hook...");
                                 library_handle.free_and_exit_thread(1);
                             }
-                            Ok(false) => {}
                             Err(e) => {
-                                error!("Self-update failed: {e:#}");
+                                error!("Self-update failed: {e:#}. Falling back to the current hook for this session.");
+
+                                if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
+                                    error!("{:#}", err);
+                                }
                             }
                         }
+                    });
+                }
+                None => {
+                    if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
+                        error!("{:#}", err);
                     }
-                });
+                }
+            }
+
+            #[cfg(not(feature = "autoupdate"))]
+            if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
+                error!("{:#}", err);
             }
         }
         DLL_PROCESS_DETACH => {
