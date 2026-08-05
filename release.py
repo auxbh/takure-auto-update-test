@@ -13,9 +13,10 @@ CARGO_TOML_PATH = Path("./Cargo.toml")
 SIGNING_KEY_PATH = Path("./takure_signing.pfx")
 SIGNING_KEY_PASSWORD = os.environ.get("TAKURE_SIGNING_KEY_PASSWORD", "takure")
 
-TARGETS = {
-    "i686-pc-windows-msvc": "takure_32",
-    "x86_64-pc-windows-msvc": "takure_64",
+# Prebuilt, unsigned DLLs downloaded from the matrixed build job as artifacts.
+ARTIFACTS = {
+    "takure_32": Path("artifacts/takure_32/takure.dll"),
+    "takure_64": Path("artifacts/takure_64/takure.dll"),
 }
 
 DIST_FOLDER = Path("dist/")
@@ -68,31 +69,18 @@ DIST_FOLDER.mkdir(parents=True, exist_ok=True)
 
 checksums = {}
 
-for target, artifact_name in TARGETS.items():
-    print(f"[INFO] Building {target}...")
+for artifact_name, dll_path in ARTIFACTS.items():
+    if not dll_path.exists():
+        raise SystemExit(f"[ERROR] Expected build artifact not found at {dll_path}.")
 
-    r = subprocess.run(
-        [
-            "cargo",
-            "build",
-            "--release",
-            "--target",
-            target,
-            "--features",
-            "autoupdate",
-        ]
-    )
-    r.check_returncode()
+    print(f"[INFO] Signing {dll_path}...")
+    sign_executable(SIGNING_KEY_PATH, SIGNING_KEY_PASSWORD, dll_path)
 
-    compiled_dll = Path(f"target/{target}/release/takure.dll")
-
-    sign_executable(SIGNING_KEY_PATH, SIGNING_KEY_PASSWORD, compiled_dll)
-
-    checksums[artifact_name] = sha256_of(compiled_dll)
+    checksums[artifact_name] = sha256_of(dll_path)
 
     archive_path = DIST_FOLDER / f"{artifact_name}.zip"
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(compiled_dll, "takure.dll")
+        z.write(dll_path, "takure.dll")
         z.write("takure.toml", "takure.toml")
 
     print(f"[INFO] Wrote {archive_path}")

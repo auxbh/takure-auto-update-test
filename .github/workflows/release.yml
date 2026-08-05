@@ -9,7 +9,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
+  build:
+    runs-on: windows-latest
+    name: Build (${{ matrix.name }})
+
+    strategy:
+      matrix:
+        include:
+          - name: win-32
+            target: i686-pc-windows-msvc
+            artifact_name: takure_32
+          - name: win-64
+            target: x86_64-pc-windows-msvc
+            artifact_name: takure_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Add build target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --features autoupdate
+
+      - name: Upload unsigned build
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned
+          path: target/${{ matrix.target }}/release/takure.dll
+
+  package:
+    needs: build
     runs-on: windows-latest
 
     permissions:
@@ -25,16 +61,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
+      - name: Download win-32 build
+        uses: actions/download-artifact@v8
+        with:
+          name: takure_32-unsigned
+          path: artifacts/takure_32
 
-      - name: Add build targets
-        run: |
-          rustup target add i686-pc-windows-msvc
-          rustup target add x86_64-pc-windows-msvc
+      - name: Download win-64 build
+        uses: actions/download-artifact@v8
+        with:
+          name: takure_64-unsigned
+          path: artifacts/takure_64
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -55,7 +95,7 @@ jobs:
           $bytes = [Convert]::FromBase64String("${{ secrets.TAKURE_SIGNING_KEY_PFX_BASE64 }}")
           [IO.File]::WriteAllBytes("takure_signing.pfx", $bytes)
 
-      - name: Build, sign and package
+      - name: Sign and package
         env:
           TAKURE_SIGNING_KEY_PASSWORD: ${{ secrets.TAKURE_SIGNING_KEY_PASSWORD }}
         run: python release.py
