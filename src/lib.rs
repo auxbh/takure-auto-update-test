@@ -18,6 +18,8 @@ use crate::takure::{hook_init, hook_release};
 use ::log::{error, info};
 use configuration::Configuration;
 use lazy_static::lazy_static;
+#[cfg(feature = "autoupdate")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
 use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE};
 use winapi::um::consoleapi::AllocConsole;
@@ -104,9 +106,18 @@ fn print_infos() {
     }
 }
 
+// Once this fires, hook_init may install persistent detours (e.g. property_destroy_hook)
+// pointing at code inside this DLL. Self-update must not unload the DLL past this point,
+// or it'll leave those detours pointing at freed memory.
+#[cfg(feature = "autoupdate")]
+pub static BOOT_STARTED: AtomicBool = AtomicBool::new(false);
+
 #[cfg_attr(target_arch = "x86", crochet::hook("libavs-win32-ea3.dll", "XE592acd00008c"))]
 #[cfg_attr(target_arch = "x86_64", crochet::hook("libavs-win64-ea3.dll", "XEyy2igh000007"))]
 unsafe extern "C" fn avs_ea3_boot_startup_hook(node: *const ()) -> i32 {
+    #[cfg(feature = "autoupdate")]
+    BOOT_STARTED.store(true, Ordering::SeqCst);
+
     if let Err(err) = hook_init(node) {
         error!("{:#}", err);
     }

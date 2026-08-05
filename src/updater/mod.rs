@@ -9,7 +9,7 @@ use std::{
     ptr,
 };
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use snafu::{prelude::Snafu, ResultExt};
@@ -48,10 +48,13 @@ use winapi::{
     },
 };
 
+use std::sync::atomic::Ordering;
+
 use self::external::{replace_with_new_library, ReplaceArgs};
 use crate::{
     consts::{GIT_SHA, PUBLIC_KEY, UPDATE_MANIFEST_URL, UPDATE_REPO, USER_AGENT},
     helpers::{get_module_file_name, LibraryHandle, ReadStringFnError},
+    BOOT_STARTED,
 };
 
 #[cfg(target_arch = "x86")]
@@ -176,6 +179,11 @@ fn expected_sha256(info: &UpdateInformation) -> &str {
 /// and the hook should uninject itself so a newer version can load in.
 #[allow(clippy::result_large_err)]
 pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
+    if BOOT_STARTED.load(Ordering::SeqCst) {
+        warn!("Game has already booted, skipping self-update to avoid unloading a hook with live detours. Will retry next launch.");
+        return Ok(false);
+    }
+
     let agent = ureq::builder().user_agent(USER_AGENT).build();
 
     info!("Checking for updates...");
@@ -260,6 +268,12 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     if actual_pubkey != PUBLIC_KEY {
         let _ = std::fs::remove_file(&new_module_path);
         return Err(SelfUpdateError::InvalidPubkey);
+    }
+
+    if BOOT_STARTED.load(Ordering::SeqCst) {
+        warn!("Game booted while downloading the update, skipping self-update to avoid unloading a hook with live detours. Will retry next launch.");
+        let _ = std::fs::remove_file(&new_module_path);
+        return Ok(false);
     }
 
     debug!("Starting update sequence");
