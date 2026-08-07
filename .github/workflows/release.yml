@@ -30,7 +30,8 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          shared-key: ${{ matrix.target }}
+          save-if: false
 
       - name: Add build target
         run: rustup target add ${{ matrix.target }}
@@ -111,7 +112,6 @@ jobs:
           files: |
             dist/takure_32.zip
             dist/takure_64.zip
-          generate_release_notes: true
 
       - name: Prepare Pages artifact
         shell: pwsh
