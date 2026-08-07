@@ -30,8 +30,7 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ matrix.target }}
-          save-if: false
+          key: ${{ matrix.target }}
 
       - name: Add build target
         run: rustup target add ${{ matrix.target }}
