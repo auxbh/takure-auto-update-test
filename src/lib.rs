@@ -8,6 +8,11 @@ mod takure;
 mod types;
 mod updater;
 
+#[cfg(feature = "autoupdate")]
+use std::thread;
+
+#[cfg(feature = "autoupdate")]
+use crate::helpers::{LibraryHandle, ThreadHandle};
 use crate::log::Logger;
 use crate::takure::{hook_init, hook_release};
 use ::log::{error, info};
@@ -130,13 +135,68 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             #[cfg(feature = "autoupdate")]
             let _ = MODULE_HANDLE.set(dll_module as usize);
 
-            // The boot hook is always installed here, unconditionally. Self-update (if
-            // enabled) runs later, synchronously inside the boot hook itself, before it
-            // installs any persistent detours — never from here. Doing it here and
-            // deferring the actual swap to a background thread would leave a window, after
-            // DllMain returns but before the reloaded hook is back up, where AVS's one-shot
-            // boot call could slip through unhooked and never get intercepted again for the
-            // rest of the game session.
+            // If a previous run already downloaded+verified an update (see hook_init /
+            // check_and_stage_update), apply it now, as the very first thing DllMain does —
+            // before any network call, before AllocConsole/logging even matter to anyone but
+            // us. This is a fresh process launch, so boot is nowhere near firing yet, and the
+            // swap itself only ever kills a throwaway thread spawned right here — never the
+            // boot thread — so there's nothing load-bearing on the other end of that kill.
+            #[cfg(feature = "autoupdate")]
+            let pending_apply = if CONFIGURATION.general.auto_update {
+                let library_handle = unsafe { LibraryHandle::new(dll_module) };
+
+                match updater::staged_update_path(&library_handle) {
+                    Ok(path) if path.exists() => Some(library_handle),
+                    Ok(_) => None,
+                    Err(e) => {
+                        error!("Could not check for a staged update: {e:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            #[cfg(feature = "autoupdate")]
+            match pending_apply {
+                Some(library_handle) => {
+                    info!("Applying previously downloaded update...");
+
+                    // Don't enable the hook in this instance — we're about to unload it.
+                    let thread_handle = ThreadHandle::duplicate_current_thread_handle();
+
+                    thread::spawn(move || {
+                        // Wait until DllMain returns and the loader lock is released before
+                        // calling FreeLibrary on ourselves, since that (and the LoadLibraryW
+                        // that follows once the old module is fully unloaded) can deadlock
+                        // while the loader lock is held.
+                        if let Ok(h) = thread_handle {
+                            h.wait_and_close(50);
+                        }
+
+                        match updater::apply_staged_update(&library_handle) {
+                            Ok(()) => {
+                                info!("Update applied. Reloading into new hook...");
+                                library_handle.free_and_exit_thread(1);
+                            }
+                            Err(e) => {
+                                error!("Failed to apply staged update: {e:#}. Falling back to the current hook for this session.");
+
+                                if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
+                                    error!("{:#}", err);
+                                }
+                            }
+                        }
+                    });
+                }
+                None => {
+                    if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
+                        error!("{:#}", err);
+                    }
+                }
+            }
+
+            #[cfg(not(feature = "autoupdate"))]
             if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
                 error!("{:#}", err);
             }

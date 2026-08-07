@@ -5,12 +5,58 @@ use crate::takure::CURRENT_CARD_ID;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::ptr;
 use snafu::Snafu;
 use widestring::U16CString;
-use winapi::shared::minwindef::{HINSTANCE, HMODULE};
+use winapi::shared::minwindef::{FALSE, HINSTANCE, HMODULE};
+use winapi::shared::ntdef::HANDLE;
 use winapi::shared::winerror::ERROR_INSUFFICIENT_BUFFER;
 use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::handleapi::{CloseHandle, DuplicateHandle};
 use winapi::um::libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW};
+use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentThread};
+use winapi::um::synchapi::WaitForSingleObject;
+use winapi::um::winnt::SYNCHRONIZE;
+
+// Used so the background thread that applies a staged update can wait for DllMain to
+// actually return (and release the loader lock) before calling FreeLibrary on ourselves —
+// doing that from within DllMain itself risks deadlock.
+#[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
+pub struct ThreadHandle(HANDLE);
+
+unsafe impl Send for ThreadHandle {}
+unsafe impl Sync for ThreadHandle {}
+impl ThreadHandle {
+    #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
+    pub fn duplicate_current_thread_handle() -> Result<Self, u32> {
+        unsafe {
+            let mut cur_thread = ptr::null_mut();
+            let result = DuplicateHandle(
+                GetCurrentProcess(),
+                GetCurrentThread(),
+                GetCurrentProcess(),
+                &mut cur_thread,
+                SYNCHRONIZE,
+                FALSE,
+                0,
+            );
+
+            if result == 0 {
+                return Err(GetLastError());
+            }
+
+            Ok(ThreadHandle(cur_thread as HANDLE))
+        }
+    }
+
+    #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
+    pub fn wait_and_close(self, ms: u32) {
+        unsafe {
+            WaitForSingleObject(self.0, ms);
+            CloseHandle(self.0);
+        }
+    }
+}
 
 #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
 pub struct LibraryHandle(HINSTANCE);
