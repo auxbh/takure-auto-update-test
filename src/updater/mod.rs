@@ -49,8 +49,6 @@ use winapi::{
 };
 
 use self::external::{replace_with_new_library, ReplaceArgs};
-// TODO(testing): GIT_SHA is unused while the version check below is disabled.
-#[allow(unused_imports)]
 use crate::{
     consts::{GIT_SHA, PUBLIC_KEY, UPDATE_MANIFEST_URL, UPDATE_REPO, USER_AGENT},
     helpers::{get_module_file_name, LibraryHandle, ReadStringFnError},
@@ -222,10 +220,7 @@ pub fn check_and_stage_update(module: &LibraryHandle) -> Result<bool, SelfUpdate
     debug!(concat!("current commit: ", env!("VERGEN_GIT_SHA")));
     debug!("remote commit: {}", response.commit);
 
-    // TODO(testing): always downloads the latest release regardless of commit, so the apply
-    // flow can be exercised without cutting two differently-tagged builds. Restore the
-    // `response.commit == GIT_SHA` check before shipping.
-    if false {
+    if response.commit == GIT_SHA {
         info!("Already up-to-date.");
 
         return Ok(false);
