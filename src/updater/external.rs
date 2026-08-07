@@ -67,6 +67,9 @@ pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void)
     // Wait for the old library to be freed
     let mut filename = 0;
 
+    // Poll tightly (not e.g. once a second) — the boot hook is completely absent for the
+    // entire span between the old module actually unloading and this loop noticing and
+    // reloading the new one, and AVS's one-shot boot call can land in that gap at any time.
     loop {
         let result = GetModuleFileNameA((*args).module, &mut filename, 1);
 
@@ -74,7 +77,7 @@ pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void)
             break;
         }
 
-        Sleep(1000);
+        Sleep(1);
     }
 
     let result = ReplaceFileW(
