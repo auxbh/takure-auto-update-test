@@ -11,6 +11,29 @@ pub static USER: AtomicU64 = AtomicU64::new(0);
 pub static CURRENT_CARD_ID: RwLock<Option<String>> = RwLock::new(None);
 
 pub fn hook_init(ea3_node: *const ()) -> Result<()> {
+    // Must run before anything below installs a persistent detour (property_destroy_hook),
+    // and before call_original hands control back to AVS's real boot startup. If an update
+    // is applied, self_update() never returns — free_and_exit_thread kills this thread, AVS
+    // reloads the swapped-in DLL, and its boot hook runs this same check again (short-circuit
+    // on a matching GIT_SHA next time) before proceeding.
+    #[cfg(feature = "autoupdate")]
+    if CONFIGURATION.general.auto_update {
+        if let Some(&handle) = crate::MODULE_HANDLE.get() {
+            let library_handle = unsafe { crate::helpers::LibraryHandle::new(handle as _) };
+
+            match crate::updater::self_update(&library_handle) {
+                Ok(true) => {
+                    info!("Self-update successful. Reloading into new hook...");
+                    library_handle.free_and_exit_thread(1);
+                }
+                Ok(false) => {}
+                Err(e) => error!("Self-update check failed: {:#}", e),
+            }
+        } else {
+            error!("Self-update check skipped: module handle was not captured in DllMain");
+        }
+    }
+
     if !CONFIGURATION.general.enable {
         return Ok(());
     }

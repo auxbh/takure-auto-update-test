@@ -8,18 +8,13 @@ mod takure;
 mod types;
 mod updater;
 
-#[cfg(feature = "autoupdate")]
-use std::thread;
-
-#[cfg(feature = "autoupdate")]
-use crate::helpers::{consume_reload_as_update_marker, mark_reload_as_update, LibraryHandle, ThreadHandle};
 use crate::log::Logger;
 use crate::takure::{hook_init, hook_release};
 use ::log::{error, info};
 use configuration::Configuration;
 use lazy_static::lazy_static;
 #[cfg(feature = "autoupdate")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use url::Url;
 use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE};
 use winapi::um::consoleapi::AllocConsole;
@@ -106,18 +101,16 @@ fn print_infos() {
     }
 }
 
-// Once this fires, hook_init may install persistent detours (e.g. property_destroy_hook)
-// pointing at code inside this DLL. Self-update must not unload the DLL past this point,
-// or it'll leave those detours pointing at freed memory.
+// Captured in DllMain, on DLL_PROCESS_ATTACH, before AVS can possibly reach the boot hook
+// below (boot cannot fire until DllMain returns). Self-update needs its own module handle
+// to locate the DLL on disk and to free/reload itself, but the boot hook receives no such
+// handle from AVS, so it's stashed here instead of threading it through call_original.
 #[cfg(feature = "autoupdate")]
-pub static BOOT_STARTED: AtomicBool = AtomicBool::new(false);
+pub static MODULE_HANDLE: OnceLock<usize> = OnceLock::new();
 
 #[cfg_attr(target_arch = "x86", crochet::hook("libavs-win32-ea3.dll", "XE592acd00008c"))]
 #[cfg_attr(target_arch = "x86_64", crochet::hook("libavs-win64-ea3.dll", "XEyy2igh000007"))]
 unsafe extern "C" fn avs_ea3_boot_startup_hook(node: *const ()) -> i32 {
-    #[cfg(feature = "autoupdate")]
-    BOOT_STARTED.store(true, Ordering::SeqCst);
-
     if let Err(err) = hook_init(node) {
         error!("{:#}", err);
     }
@@ -134,80 +127,16 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             init_logger();
             print_infos();
 
-            // avs_ea3_boot_startup_hook fires once, very early during game boot, and boot
-            // can't happen before DllMain returns (it runs on the same thread, right after
-            // LoadLibrary), so it's safe to block here on the update check — the game simply
-            // can't race us. What we can't do is touch anything loader-lock-sensitive
-            // (LoadLibrary, CreateThread-then-LoadLibrary) before returning, so the check
-            // itself (network + disk, no LoadLibrary) runs synchronously here, and only the
-            // actual swap-and-reload is deferred to a background thread further down.
-            //
-            // If this load is a fresh reload right after applying an update, skip the check
-            // entirely — it already ran and passed before the reload was triggered, and
-            // redoing a network round-trip here would only widen the window where boot can
-            // fire before the hook is back up.
             #[cfg(feature = "autoupdate")]
-            let pending_update = if consume_reload_as_update_marker() {
-                None
-            } else if CONFIGURATION.general.auto_update {
-                let library_handle = unsafe { LibraryHandle::new(dll_module) };
+            let _ = MODULE_HANDLE.set(dll_module as usize);
 
-                match updater::self_update(&library_handle) {
-                    Ok(Some(new_path)) => Some((library_handle, new_path)),
-                    Ok(None) => None,
-                    Err(e) => {
-                        error!("Self-update check failed: {e:#}");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            #[cfg(feature = "autoupdate")]
-            match pending_update {
-                Some((library_handle, new_path)) => {
-                    // An update is ready to apply — don't enable the hook in this instance,
-                    // since we're about to replace it. If hook_init doesn't run here, there's
-                    // nothing to leave dangling when we unload.
-                    let thread_handle = ThreadHandle::duplicate_current_thread_handle();
-
-                    thread::spawn(move || {
-                        // Wait until DllMain returns and the loader lock is released before
-                        // applying the update, since it creates a thread and eventually
-                        // calls LoadLibraryW, which can deadlock while the loader lock is
-                        // held. DllMain returns essentially immediately after spawning this
-                        // thread (there's no more work after it), so this only needs to
-                        // cover that brief handoff — every extra millisecond here is time
-                        // the boot hook spends not installed.
-                        if let Ok(h) = thread_handle {
-                            h.wait_and_close(50);
-                        }
-
-                        match updater::apply_update(&library_handle, &new_path) {
-                            Ok(()) => {
-                                info!("Self-update successful. Reloading into new hook...");
-                                mark_reload_as_update();
-                                library_handle.free_and_exit_thread(1);
-                            }
-                            Err(e) => {
-                                error!("Self-update failed: {e:#}. Falling back to the current hook for this session.");
-
-                                if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                                    error!("{:#}", err);
-                                }
-                            }
-                        }
-                    });
-                }
-                None => {
-                    if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                        error!("{:#}", err);
-                    }
-                }
-            }
-
-            #[cfg(not(feature = "autoupdate"))]
+            // The boot hook is always installed here, unconditionally. Self-update (if
+            // enabled) runs later, synchronously inside the boot hook itself, before it
+            // installs any persistent detours — never from here. Doing it here and
+            // deferring the actual swap to a background thread would leave a window, after
+            // DllMain returns but before the reloaded hook is back up, where AVS's one-shot
+            // boot call could slip through unhooked and never get intercepted again for the
+            // rest of the game session.
             if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
                 error!("{:#}", err);
             }

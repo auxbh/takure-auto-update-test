@@ -5,7 +5,7 @@ mod external;
 use std::{
     io::{self, Cursor, Read},
     mem::{self},
-    path::{Path, PathBuf},
+    path::Path,
     ptr,
 };
 
@@ -48,13 +48,11 @@ use winapi::{
     },
 };
 
-use std::sync::atomic::Ordering;
-
 use self::external::{replace_with_new_library, ReplaceArgs};
 use crate::{
     consts::{GIT_SHA, PUBLIC_KEY, UPDATE_MANIFEST_URL, UPDATE_REPO, USER_AGENT},
     helpers::{get_module_file_name, LibraryHandle, ReadStringFnError},
-    BOOT_STARTED, CONFIGURATION,
+    CONFIGURATION,
 };
 
 #[cfg(target_arch = "x86")]
@@ -116,9 +114,6 @@ pub enum SelfUpdateError {
 
     #[snafu(display("Public key mismatched."))]
     InvalidPubkey,
-
-    #[snafu(display("Game booted before the update could be applied."))]
-    BootAlreadyStarted,
 }
 
 #[derive(Snafu, Debug)]
@@ -178,16 +173,21 @@ fn expected_sha256(info: &UpdateInformation) -> &str {
     &info.sha256_64
 }
 
-/// Checks if a newer version is available, and if so, downloads, verifies and writes it
-/// to disk next to the current hook. Must be called synchronously from DllMain, before
-/// the boot hook is enabled — it never touches anything that could deadlock on the
-/// loader lock (no LoadLibrary, no thread creation), so unlike `apply_update`, it doesn't
-/// need to wait for DllMain to return.
+/// Checks if a newer version is available, and if so, downloads, verifies, swaps it in and
+/// reloads it in place of the current hook.
 ///
-/// Returns the path to the downloaded (but not yet applied) update, or `None` if already
-/// up to date.
+/// Must be called from within the boot hook (`avs_ea3_boot_startup_hook`/`hook_init`),
+/// before `call_original!` and before any persistent detours are installed — not from
+/// DllMain. AVS cannot have reached the boot hook before DllMain has returned, so by the
+/// time this runs, the hook is already the active one; there is no window where an update
+/// can be "in flight" while the real boot call slips through unhooked. This mirrors
+/// saekawa's approach.
+///
+/// Returns `true` if an update was applied and the caller should let the current thread
+/// die via `LibraryHandle::free_and_exit_thread` (which this function itself does not call,
+/// so the caller can log first), or `false` if already up to date.
 #[allow(clippy::result_large_err)]
-pub fn self_update(module: &LibraryHandle) -> Result<Option<PathBuf>, SelfUpdateError> {
+pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     let timeout = std::cmp::min(CONFIGURATION.general.timeout, 10000);
     let agent = ureq::builder()
         .user_agent(USER_AGENT)
@@ -208,7 +208,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<Option<PathBuf>, SelfUpdate
     if response.commit == GIT_SHA {
         info!("Already up-to-date.");
 
-        return Ok(None);
+        return Ok(false);
     }
 
     let module_filename =
@@ -277,28 +277,6 @@ pub fn self_update(module: &LibraryHandle) -> Result<Option<PathBuf>, SelfUpdate
         let _ = std::fs::remove_file(&new_module_path);
         return Err(SelfUpdateError::InvalidPubkey);
     }
-
-    Ok(Some(new_module_path))
-}
-
-/// Actually swaps the current hook out for the downloaded update and loads it back in.
-/// Must be called from a background thread after DllMain has returned (never from within
-/// DllMain itself), since it creates a thread and eventually calls LoadLibraryW, both of
-/// which can deadlock on the loader lock if done too early.
-///
-/// Must NOT be called if the boot hook has already fired — hook_init may have installed
-/// persistent detours pointing at code inside this DLL, and unloading it would leave those
-/// pointing at freed memory.
-#[allow(clippy::result_large_err)]
-pub fn apply_update(module: &LibraryHandle, new_module_path: &Path) -> Result<(), SelfUpdateError> {
-    if BOOT_STARTED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_file(new_module_path);
-        return Err(SelfUpdateError::BootAlreadyStarted);
-    }
-
-    let module_filename =
-        &get_module_file_name(module.handle()).context(FailedToGetFilenameSnafu)?;
-    let new_module_filename = new_module_path.to_string_lossy();
 
     debug!("Starting update sequence");
     // You know stuff is going to be cursed when the unsafe block is ~120 lines long.
@@ -442,7 +420,7 @@ pub fn apply_update(module: &LibraryHandle, new_module_path: &Path) -> Result<()
             });
         }
 
-        Ok(())
+        Ok(true)
     }
 }
 
