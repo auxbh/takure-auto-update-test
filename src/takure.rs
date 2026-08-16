@@ -11,22 +11,56 @@ pub static USER: AtomicU64 = AtomicU64::new(0);
 pub static CURRENT_CARD_ID: RwLock<Option<String>> = RwLock::new(None);
 
 pub fn hook_init(ea3_node: *const ()) -> Result<()> {
+    let info = helpers::read_node_str(ea3_node, b"/soft/model\0".as_ptr(), 3).and_then(|model| {
+        let dest = helpers::read_node_str(ea3_node, b"/soft/dest\0".as_ptr(), 1)?;
+        let spec = helpers::read_node_str(ea3_node, b"/soft/spec\0".as_ptr(), 1)?;
+        let revision = helpers::read_node_str(ea3_node, b"/soft/rev\0".as_ptr(), 1)?;
+        let ext = helpers::read_node_str(ea3_node, b"/soft/ext\0".as_ptr(), 10)?;
+        Some((model, dest, spec, revision, ext))
+    });
+
+    // Stash the raw node data so a self-update reload (which never sees another boot event
+    // this session) can redo this same gate check from crate::consts::GAME_INFO_ENV instead.
+    #[cfg(feature = "autoupdate")]
+    if let Some((model, dest, spec, revision, ext)) = &info {
+        std::env::set_var(
+            crate::consts::GAME_INFO_ENV,
+            format!("{model}:{dest}:{spec}:{revision}:{ext}"),
+        );
+    }
+
+    init_from_game_info(info)
+}
+
+/// Re-runs the gate check + Tachi status check + `property_destroy_hook` install using the
+/// node data a previous instance (in this same game session) captured before self-updating.
+/// AVS's boot event doesn't fire again for a reloaded module, so this is the only way a
+/// post-update instance gets initialized.
+#[cfg(feature = "autoupdate")]
+pub fn hook_init_from_cached_info() -> Result<()> {
+    let info = std::env::var(crate::consts::GAME_INFO_ENV).ok().and_then(|s| {
+        let mut parts = s.splitn(5, ':');
+        Some((
+            parts.next()?.to_string(),
+            parts.next()?.to_string(),
+            parts.next()?.to_string(),
+            parts.next()?.to_string(),
+            parts.next()?.to_string(),
+        ))
+    });
+
+    init_from_game_info(info)
+}
+
+fn init_from_game_info(info: Option<(String, String, String, String, String)>) -> Result<()> {
     if !CONFIGURATION.general.enable {
         return Ok(());
     }
 
-    if let Some((model, dest, spec, revision, ext)) =
-        helpers::read_node_str(ea3_node, b"/soft/model\0".as_ptr(), 3).and_then(|model| {
-            let dest = helpers::read_node_str(ea3_node, b"/soft/dest\0".as_ptr(), 1)?;
-            let spec = helpers::read_node_str(ea3_node, b"/soft/spec\0".as_ptr(), 1)?;
-            let revision = helpers::read_node_str(ea3_node, b"/soft/rev\0".as_ptr(), 1)?;
-            let ext = helpers::read_node_str(ea3_node, b"/soft/ext\0".as_ptr(), 10)?
-                .parse::<u64>()
-                .unwrap_or(0);
-            Some((model, dest, spec, revision, ext))
-        })
-    {
-        if model != "MDX" || revision == "O" || revision == "X" || ext < 2022022801 {
+    if let Some((model, dest, spec, revision, ext)) = info {
+        let ext_num = ext.parse::<u64>().unwrap_or(0);
+
+        if model != "MDX" || revision == "O" || revision == "X" || ext_num < 2022022801 {
             error!(
                 "Unsupported model/revision/ext '{}:{}:{}:{}:{}', hook will not be enabled",
                 model, dest, spec, revision, ext
