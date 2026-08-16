@@ -102,6 +102,16 @@ fn print_infos() {
     }
 }
 
+#[cfg_attr(target_arch = "x86", crochet::hook("libavs-win32-ea3.dll", "XE592acd00008c"))]
+#[cfg_attr(target_arch = "x86_64", crochet::hook("libavs-win64-ea3.dll", "XEyy2igh000007"))]
+unsafe extern "C" fn avs_ea3_boot_startup_hook(node: *const ()) -> i32 {
+    if let Err(err) = hook_init(node) {
+        error!("{:#}", err);
+    }
+
+    call_original!(node)
+}
+
 #[no_mangle]
 #[allow(non_snake_case, unused_variables)]
 extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: LPVOID) -> BOOL {
@@ -110,6 +120,7 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             unsafe { AllocConsole() };
             init_logger();
 
+            #[cfg_attr(not(feature = "autoupdate"), allow(unused_variables))]
             let library_handle = unsafe { LibraryHandle::new(dll_module) };
             let thread_handle = ThreadHandle::duplicate_current_thread_handle();
 
@@ -123,12 +134,33 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
 
                 print_infos();
 
-                if let Err(err) = hook_init(library_handle) {
+                // Run before the boot hook installs — self-update never needs game version
+                // data, and AVS's boot event only fires once per session and isn't retried,
+                // so it must not be exposed to a hook that's about to unload/reload.
+                #[cfg(feature = "autoupdate")]
+                if CONFIGURATION.general.auto_update {
+                    match updater::self_update(&library_handle) {
+                        Ok(true) => {
+                            info!("Self-update successful. Reloading into new hook...");
+                            library_handle.free_and_exit_thread(1);
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            error!("Self-update failed: {e:#}");
+                        }
+                    }
+                }
+
+                if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
                     error!("{:#}", err);
                 }
             });
         }
         DLL_PROCESS_DETACH => {
+            if let Err(err) = crochet::disable!(avs_ea3_boot_startup_hook) {
+                error!("{:#}", err);
+            }
+
             if let Err(err) = hook_release() {
                 error!("{:#}", err);
             }
