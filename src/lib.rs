@@ -8,18 +8,14 @@ mod takure;
 mod types;
 mod updater;
 
-#[cfg(feature = "autoupdate")]
 use std::thread;
 
-#[cfg(feature = "autoupdate")]
 use crate::helpers::{LibraryHandle, ThreadHandle};
 use crate::log::Logger;
 use crate::takure::{hook_init, hook_release};
 use ::log::{error, info};
 use configuration::Configuration;
 use lazy_static::lazy_static;
-#[cfg(feature = "autoupdate")]
-use std::sync::OnceLock;
 use url::Url;
 use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE};
 use winapi::um::consoleapi::AllocConsole;
@@ -106,23 +102,6 @@ fn print_infos() {
     }
 }
 
-// Captured in DllMain, on DLL_PROCESS_ATTACH, before AVS can possibly reach the boot hook
-// below (boot cannot fire until DllMain returns). Self-update needs its own module handle
-// to locate the DLL on disk and to free/reload itself, but the boot hook receives no such
-// handle from AVS, so it's stashed here instead of threading it through call_original.
-#[cfg(feature = "autoupdate")]
-pub static MODULE_HANDLE: OnceLock<usize> = OnceLock::new();
-
-#[cfg_attr(target_arch = "x86", crochet::hook("libavs-win32-ea3.dll", "XE592acd00008c"))]
-#[cfg_attr(target_arch = "x86_64", crochet::hook("libavs-win64-ea3.dll", "XEyy2igh000007"))]
-unsafe extern "C" fn avs_ea3_boot_startup_hook(node: *const ()) -> i32 {
-    if let Err(err) = hook_init(node) {
-        error!("{:#}", err);
-    }
-
-    call_original!(node)
-}
-
 #[no_mangle]
 #[allow(non_snake_case, unused_variables)]
 extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: LPVOID) -> BOOL {
@@ -130,82 +109,26 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
         DLL_PROCESS_ATTACH => {
             unsafe { AllocConsole() };
             init_logger();
-            print_infos();
 
-            #[cfg(feature = "autoupdate")]
-            let _ = MODULE_HANDLE.set(dll_module as usize);
+            let library_handle = unsafe { LibraryHandle::new(dll_module) };
+            let thread_handle = ThreadHandle::duplicate_current_thread_handle();
 
-            // If a previous run already downloaded+verified an update (see hook_init /
-            // check_and_stage_update), apply it now, as the very first thing DllMain does —
-            // before any network call, before AllocConsole/logging even matter to anyone but
-            // us. This is a fresh process launch, so boot is nowhere near firing yet, and the
-            // swap itself only ever kills a throwaway thread spawned right here — never the
-            // boot thread — so there's nothing load-bearing on the other end of that kill.
-            #[cfg(feature = "autoupdate")]
-            let pending_apply = if CONFIGURATION.general.auto_update {
-                let library_handle = unsafe { LibraryHandle::new(dll_module) };
-
-                match updater::staged_update_path(&library_handle) {
-                    Ok(path) if path.exists() => Some(library_handle),
-                    Ok(_) => None,
-                    Err(e) => {
-                        error!("Could not check for a staged update: {e:#}");
-                        None
-                    }
+            thread::spawn(move || {
+                // Wait until DllMain returns and the loader lock is released before doing
+                // any real work, otherwise self-updating (which needs to spawn its own
+                // thread and touch the filesystem) can deadlock.
+                if let Ok(h) = thread_handle {
+                    h.wait_and_close(1000);
                 }
-            } else {
-                None
-            };
 
-            #[cfg(feature = "autoupdate")]
-            match pending_apply {
-                Some(library_handle) => {
-                    info!("Applying previously downloaded update...");
+                print_infos();
 
-                    // Don't enable the hook in this instance — we're about to unload it.
-                    let thread_handle = ThreadHandle::duplicate_current_thread_handle();
-
-                    thread::spawn(move || {
-                        // Wait until DllMain returns and the loader lock is released before
-                        // calling FreeLibrary on ourselves, since that (and the LoadLibraryW
-                        // that follows once the old module is fully unloaded) can deadlock
-                        // while the loader lock is held.
-                        if let Ok(h) = thread_handle {
-                            h.wait_and_close(50);
-                        }
-
-                        match updater::apply_staged_update(&library_handle) {
-                            Ok(()) => {
-                                info!("Update applied. Reloading into new hook...");
-                                library_handle.free_and_exit_thread(1);
-                            }
-                            Err(e) => {
-                                error!("Failed to apply staged update: {e:#}. Falling back to the current hook for this session.");
-
-                                if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                                    error!("{:#}", err);
-                                }
-                            }
-                        }
-                    });
+                if let Err(err) = hook_init(library_handle) {
+                    error!("{:#}", err);
                 }
-                None => {
-                    if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                        error!("{:#}", err);
-                    }
-                }
-            }
-
-            #[cfg(not(feature = "autoupdate"))]
-            if let Err(err) = crochet::enable!(avs_ea3_boot_startup_hook) {
-                error!("{:#}", err);
-            }
+            });
         }
         DLL_PROCESS_DETACH => {
-            if let Err(err) = crochet::disable!(avs_ea3_boot_startup_hook) {
-                error!("{:#}", err);
-            }
-
             if let Err(err) = hook_release() {
                 error!("{:#}", err);
             }

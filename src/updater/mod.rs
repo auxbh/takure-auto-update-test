@@ -5,7 +5,7 @@ mod external;
 use std::{
     io::{self, Cursor, Read},
     mem::{self},
-    path::{Path, PathBuf},
+    path::Path,
     ptr,
 };
 
@@ -173,35 +173,13 @@ fn expected_sha256(info: &UpdateInformation) -> &str {
     &info.sha256_64
 }
 
-/// Returns the path a staged-but-not-yet-applied update would live at, and whether it's
-/// actually there. Cheap (no network) — safe to call from anywhere, including the boot
-/// thread, to decide whether an apply is needed.
+/// Checks if the hook has a newer version. Returns true if update was successful
+/// and the hook should uninject itself so a newer version can load in.
 #[allow(clippy::result_large_err)]
-pub fn staged_update_path(module: &LibraryHandle) -> Result<PathBuf, SelfUpdateError> {
+pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     let module_filename =
         &get_module_file_name(module.handle()).context(FailedToGetFilenameSnafu)?;
-
-    Ok(Path::new(module_filename).with_file_name("takure.new.dll"))
-}
-
-/// Checks if a newer version is available, and if so, downloads and verifies it, writing it
-/// to disk next to the current hook as `takure.new.dll`. Does **not** apply it — that only
-/// ever happens via [`apply_staged_update`], from `DllMain`, on the next process launch.
-///
-/// Safe to call from anywhere, including the boot thread (`hook_init`) — this never unloads
-/// or reloads the current module, so there's no risk to whatever thread called it.
-///
-/// Returns `true` if an update is now staged (either just downloaded, or already staged from
-/// a previous check), or `false` if already up to date.
-#[allow(clippy::result_large_err)]
-pub fn check_and_stage_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
-    let new_module_path = staged_update_path(module)?;
-
-    if new_module_path.exists() {
-        debug!("Update already staged at {new_module_path:#?}, skipping check.");
-
-        return Ok(true);
-    }
+    let module_path = Path::new(module_filename);
 
     let timeout = std::cmp::min(CONFIGURATION.general.timeout, 10000);
     let agent = ureq::builder()
@@ -264,6 +242,8 @@ pub fn check_and_stage_update(module: &LibraryHandle) -> Result<bool, SelfUpdate
     debug!("Validating update contents...");
     validate_sha256(&new_hook, expected_sha256(&response))?;
 
+    let new_module_path = module_path.with_file_name("takure.new.dll");
+
     debug!("Writing update contents to {new_module_path:#?}...");
     std::fs::write(&new_module_path, new_hook).context(FailedWritingUpdateSnafu)?;
 
@@ -272,44 +252,6 @@ pub fn check_and_stage_update(module: &LibraryHandle) -> Result<bool, SelfUpdate
     verify_signature(&new_module_filename).context(InvalidSignatureSnafu)?;
 
     debug!("Verifying certificate public key...");
-    let actual_pubkey = match get_signature_pubkey(&new_module_filename) {
-        Ok(k) => k,
-        Err(e) => {
-            let _ = std::fs::remove_file(&new_module_path);
-            return Err(SelfUpdateError::FailedGettingPubkey { source: e });
-        }
-    };
-
-    if actual_pubkey != PUBLIC_KEY {
-        let _ = std::fs::remove_file(&new_module_path);
-        return Err(SelfUpdateError::InvalidPubkey);
-    }
-
-    info!("Update v{} staged, will be applied on next launch.", response.version);
-
-    Ok(true)
-}
-
-/// Actually swaps the current hook out for a previously staged update (from
-/// [`check_and_stage_update`]) and loads it back in. Re-verifies the staged file's signature
-/// and public key first, since it may have sat on disk since a previous run.
-///
-/// Must be called from a background thread spawned from `DllMain`, after `DllMain` has
-/// returned (never from within `DllMain` itself, and never from the boot hook) — it creates
-/// a thread and eventually calls `LoadLibraryW`, both of which can deadlock on the loader
-/// lock if done too early, and it must complete (and the hook be reinstalled) before AVS can
-/// possibly reach the boot hook, which is only guaranteed if it starts before `DllMain`
-/// returns and never yields to anything that could call back into AVS.
-#[allow(clippy::result_large_err)]
-pub fn apply_staged_update(module: &LibraryHandle) -> Result<(), SelfUpdateError> {
-    let module_filename =
-        &get_module_file_name(module.handle()).context(FailedToGetFilenameSnafu)?;
-    let new_module_path = staged_update_path(module)?;
-    let new_module_filename = new_module_path.to_string_lossy();
-
-    debug!("Re-verifying staged update before applying...");
-    verify_signature(&new_module_filename).context(InvalidSignatureSnafu)?;
-
     let actual_pubkey = match get_signature_pubkey(&new_module_filename) {
         Ok(k) => k,
         Err(e) => {
@@ -465,7 +407,7 @@ pub fn apply_staged_update(module: &LibraryHandle) -> Result<(), SelfUpdateError
             });
         }
 
-        Ok(())
+        Ok(true)
     }
 }
 

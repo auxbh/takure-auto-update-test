@@ -1,6 +1,5 @@
 use anyhow::Result;
 use crate::CONFIGURATION;
-use crate::sys::{property_node_refer, NodeType};
 use crate::takure::CURRENT_CARD_ID;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
@@ -184,24 +183,4 @@ pub fn get_current_card_id() -> Option<String> {
     });
 
     guard.clone()
-}
-
-pub fn read_node_str(node: *const (), path: *const u8, length: usize) -> Option<String> {
-    let mut buffer = [0u8; 32];
-    let result = unsafe {
-        property_node_refer(
-            node,
-            node,
-            path,
-            NodeType::NodeStr,
-            buffer.as_mut_ptr() as *mut (),
-            32,
-        )
-    };
-
-    if result < 0 {
-        return None;
-    }
-
-    Some(String::from_utf8_lossy(&buffer[..length]).to_string())
 }

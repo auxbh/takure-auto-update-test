@@ -10,55 +10,24 @@ use log::{debug, error, info, warn};
 pub static USER: AtomicU64 = AtomicU64::new(0);
 pub static CURRENT_CARD_ID: RwLock<Option<String>> = RwLock::new(None);
 
-pub fn hook_init(ea3_node: *const ()) -> Result<()> {
-    // Only ever stages an update on disk (download + verify) — never applies it. Applying
-    // means unloading and reloading this DLL, which is only safe to do from the throwaway
-    // thread DllMain spawns for it, never from this thread: AVS calls this boot hook exactly
-    // once per session and doesn't retry it, so killing it here to apply an update would
-    // leave the game stuck mid-boot instead of just missing this session's hook. A staged
-    // update gets picked up and applied at the very start of the next process launch.
+#[cfg_attr(not(feature = "autoupdate"), allow(unused_variables))]
+pub fn hook_init(library_handle: helpers::LibraryHandle) -> Result<()> {
     #[cfg(feature = "autoupdate")]
     if CONFIGURATION.general.auto_update {
-        if let Some(&handle) = crate::MODULE_HANDLE.get() {
-            let library_handle = unsafe { crate::helpers::LibraryHandle::new(handle as _) };
-
-            if let Err(e) = crate::updater::check_and_stage_update(&library_handle) {
-                error!("Self-update check failed: {:#}", e);
+        match crate::updater::self_update(&library_handle) {
+            Ok(true) => {
+                info!("Self-update successful. Reloading into new hook...");
+                library_handle.free_and_exit_thread(1);
             }
-        } else {
-            error!("Self-update check skipped: module handle was not captured in DllMain");
+            Ok(false) => {}
+            Err(e) => {
+                error!("Self-update failed: {:#}", e);
+            }
         }
     }
 
     if !CONFIGURATION.general.enable {
         return Ok(());
-    }
-
-    if let Some((model, dest, spec, revision, ext)) =
-        helpers::read_node_str(ea3_node, b"/soft/model\0".as_ptr(), 3).and_then(|model| {
-            let dest = helpers::read_node_str(ea3_node, b"/soft/dest\0".as_ptr(), 1)?;
-            let spec = helpers::read_node_str(ea3_node, b"/soft/spec\0".as_ptr(), 1)?;
-            let revision = helpers::read_node_str(ea3_node, b"/soft/rev\0".as_ptr(), 1)?;
-            let ext = helpers::read_node_str(ea3_node, b"/soft/ext\0".as_ptr(), 10)?
-                .parse::<u64>()
-                .unwrap_or(0);
-            Some((model, dest, spec, revision, ext))
-        })
-    {
-        if model != "MDX" || revision == "O" || revision == "X" || ext < 2022022801 {
-            error!(
-                "Unsupported model/revision/ext '{}:{}:{}:{}:{}', hook will not be enabled",
-                model, dest, spec, revision, ext
-            );
-            return Ok(());
-        } else {
-            info!(
-                "Detected game software '{}:{}:{}:{}:{}'",
-                model, dest, spec, revision, ext
-            );
-        }
-    } else {
-        warn!("Could not read game version, hook might not work properly");
     }
 
     // Trying to reach Tachi API
