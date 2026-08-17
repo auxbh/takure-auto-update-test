@@ -11,7 +11,7 @@ import tomllib
 CARGO_TOML_PATH = Path("./Cargo.toml")
 
 SIGNING_KEY_PATH = Path("./takure_signing.pfx")
-SIGNING_KEY_PASSWORD = os.environ.get("TAKURE_SIGNING_KEY_PASSWORD", "takure")
+SIGNING_KEY_PASSWORD = os.environ("TAKURE_SIGNING_KEY_PASSWORD")
 
 # Prebuilt, unsigned DLLs downloaded from the matrixed build job as artifacts.
 ARTIFACTS = {
