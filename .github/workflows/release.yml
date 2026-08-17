@@ -13,6 +13,9 @@ jobs:
     runs-on: windows-latest
     name: Build (${{ matrix.name }})
 
+    permissions:
+      contents: read
+
     strategy:
       matrix:
         include:
