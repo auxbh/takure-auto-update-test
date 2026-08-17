@@ -33,10 +33,8 @@ def sign_executable(key: Path, password: str, file: Path):
             password,
             "-fd",
             "SHA256",
-            "-tr",
-            "https://timestamp.sectigo.com",
-            "-td",
-            "SHA256",
+            "-t",
+            "http://timestamp.comodoca.com/authenticode",
             "-v",
             str(file),
         ]
