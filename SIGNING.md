@@ -43,8 +43,10 @@ Note the thumbprint it prints out (`$cert.Thumbprint`), you'll need it below.
 ## 2. Export the certificate + private key to a PFX
 
 ```powershell
-$password = ConvertTo-SecureString -String "<PASSWORD>" -Force -AsPlainText
-Export-PfxCertificate -Cert $cert -FilePath .\takure_signing.pfx -Password $password
+& {
+    $password = ConvertTo-SecureString -String "<PASSWORD>" -Force -AsPlainText
+    Export-PfxCertificate -Cert $cert -FilePath .\takure_signing.pfx -Password $password
+}
 ```
 
 Replace `"<PASSWORD>"` with a strong password.
@@ -59,49 +61,51 @@ staged. This file is your private signing key; treat it like a secret.
 raw modulus/exponent. Run this in PowerShell, replacing the thumbprint with the one from step 1:
 
 ```powershell
-function ConvertTo-Asn1Length {
-    param([int]$Length)
-    if ($Length -lt 0x80) {
-        return [byte[]]@($Length)
+& {
+    function ConvertTo-Asn1Length {
+        param([int]$Length)
+        if ($Length -lt 0x80) {
+            return [byte[]]@($Length)
+        }
+        $lenBytes = @()
+        $temp = $Length
+        while ($temp -gt 0) {
+            $lenBytes = ,([byte]($temp -band 0xFF)) + $lenBytes
+            $temp = $temp -shr 8
+        }
+        return ,([byte](0x80 -bor $lenBytes.Length)) + $lenBytes
     }
-    $lenBytes = @()
-    $temp = $Length
-    while ($temp -gt 0) {
-        $lenBytes = ,([byte]($temp -band 0xFF)) + $lenBytes
-        $temp = $temp -shr 8
+
+    function ConvertTo-Asn1Integer {
+        param([byte[]]$Bytes)
+        $b = $Bytes
+        $i = 0
+        while ($i -lt ($b.Length - 1) -and $b[$i] -eq 0) { $i++ }
+        $b = $b[$i..($b.Length - 1)]
+        if ($b[0] -band 0x80) {
+            $b = ,[byte]0x00 + $b
+        }
+        return ,0x02 + (ConvertTo-Asn1Length -Length $b.Length) + $b
     }
-    return ,([byte](0x80 -bor $lenBytes.Length)) + $lenBytes
-}
 
-function ConvertTo-Asn1Integer {
-    param([byte[]]$Bytes)
-    $b = $Bytes
-    $i = 0
-    while ($i -lt ($b.Length - 1) -and $b[$i] -eq 0) { $i++ }
-    $b = $b[$i..($b.Length - 1)]
-    if ($b[0] -band 0x80) {
-        $b = ,[byte]0x00 + $b
+    $cert = Get-Item "Cert:\CurrentUser\My\<THUMBPRINT>"
+    $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($cert)
+    $params = $rsa.ExportParameters($false)
+
+    $modulusDer = ConvertTo-Asn1Integer -Bytes $params.Modulus
+    $exponentDer = ConvertTo-Asn1Integer -Bytes $params.Exponent
+    $content = $modulusDer + $exponentDer
+    $pubKeyDer = ,0x30 + (ConvertTo-Asn1Length -Length $content.Length) + $content
+
+    $lines = for ($i = 0; $i -lt $pubKeyDer.Length; $i += 16) {
+        $chunk = $pubKeyDer[$i..([Math]::Min($i + 15, $pubKeyDer.Length - 1))]
+        "    " + (($chunk | ForEach-Object { "0x{0:x2}" -f $_ }) -join ", ") + ","
     }
-    return ,0x02 + (ConvertTo-Asn1Length -Length $b.Length) + $b
+
+    Write-Output "pub const PUBLIC_KEY: [u8; $($pubKeyDer.Length)] = ["
+    $lines
+    Write-Output "];"
 }
-
-$cert = Get-Item "Cert:\CurrentUser\My\<THUMBPRINT>"
-$rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($cert)
-$params = $rsa.ExportParameters($false)
-
-$modulusDer = ConvertTo-Asn1Integer -Bytes $params.Modulus
-$exponentDer = ConvertTo-Asn1Integer -Bytes $params.Exponent
-$content = $modulusDer + $exponentDer
-$pubKeyDer = ,0x30 + (ConvertTo-Asn1Length -Length $content.Length) + $content
-
-$lines = for ($i = 0; $i -lt $pubKeyDer.Length; $i += 16) {
-    $chunk = $pubKeyDer[$i..([Math]::Min($i + 15, $pubKeyDer.Length - 1))]
-    "    " + (($chunk | ForEach-Object { "0x{0:x2}" -f $_ }) -join ", ") + ","
-}
-
-Write-Output "pub const PUBLIC_KEY: [u8; $($pubKeyDer.Length)] = ["
-$lines
-Write-Output "];"
 ```
 
 Paste the resulting output into `src/consts.rs`, replacing the existing `PUBLIC_KEY` constant:
@@ -163,7 +167,7 @@ The release workflow reads two secrets: the PFX file (base64-encoded) and its pa
 Base64-encode the PFX:
 
 ```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes(".\takure_signing.pfx")) | Set-Clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path .\takure_signing.pfx))) | Set-Clipboard
 ```
 
 This copies the base64 blob straight to your clipboard.
