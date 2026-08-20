@@ -8,7 +8,6 @@ mod takure;
 mod types;
 mod updater;
 
-#[cfg(feature = "autoupdate")]
 use std::thread;
 #[cfg(feature = "autoupdate")]
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -177,9 +176,11 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             let self_update_enabled = false;
 
             if !reloaded_after_update && !self_update_enabled {
-                if let Err(err) = check_for_update() {
-                    error!("Unable to get update informations {:#}", err);
-                }
+                thread::spawn(|| {
+                    if let Err(err) = check_for_update() {
+                        error!("Unable to get update informations {:#}", err);
+                    }
+                });
             }
 
             #[cfg(feature = "autoupdate")]
