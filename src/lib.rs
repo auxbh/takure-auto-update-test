@@ -8,13 +8,14 @@ mod takure;
 mod types;
 mod updater;
 
+#[cfg(feature = "autoupdate")]
 use std::thread;
-
 #[cfg(feature = "autoupdate")]
 use std::sync::{mpsc, Mutex, OnceLock};
 
 #[cfg(feature = "autoupdate")]
 use crate::takure::hook_init_from_cached_info;
+#[cfg(feature = "autoupdate")]
 use crate::helpers::{LibraryHandle, ThreadHandle};
 use crate::log::Logger;
 use crate::takure::{hook_init, hook_release};
@@ -196,40 +197,40 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                 }
             }
 
-            #[cfg_attr(not(feature = "autoupdate"), allow(unused_variables))]
-            let library_handle = unsafe { LibraryHandle::new(dll_module) };
-            let thread_handle = ThreadHandle::duplicate_current_thread_handle();
+            #[cfg(feature = "autoupdate")]
+            {
+                let library_handle = unsafe { LibraryHandle::new(dll_module) };
+                let thread_handle = ThreadHandle::duplicate_current_thread_handle();
 
-            thread::spawn(move || {
-                // Avoid deadlock: wait for DllMain to release the loader lock first
-                if let Ok(h) = thread_handle {
-                    h.wait_and_close(1000);
-                }
-
-                #[cfg(feature = "autoupdate")]
-                if reloaded_after_update {
-                    if let Err(err) = hook_init_from_cached_info() {
-                        error!("{:#}", err);
+                thread::spawn(move || {
+                    // Avoid deadlock: wait for DllMain to release the loader lock first
+                    if let Ok(h) = thread_handle {
+                        h.wait_and_close(1000);
                     }
-                    return;
-                }
 
-                #[cfg(feature = "autoupdate")]
-                if let Some(rx) = boot_rx {
-                    let _ = rx.recv();
-
-                    match updater::self_update(&library_handle) {
-                        Ok(true) => {
-                            info!("Self-update successful. Reloading into new hook...");
-                            library_handle.free_and_exit_thread(1);
+                    if reloaded_after_update {
+                        if let Err(err) = hook_init_from_cached_info() {
+                            error!("{:#}", err);
                         }
-                        Ok(false) => {}
-                        Err(e) => {
-                            error!("Self-update failed: {e:#}");
+                        return;
+                    }
+
+                    if let Some(rx) = boot_rx {
+                        let _ = rx.recv();
+
+                        match updater::self_update(&library_handle) {
+                            Ok(true) => {
+                                info!("Self-update successful. Reloading into new hook...");
+                                library_handle.free_and_exit_thread(1);
+                            }
+                            Ok(false) => {}
+                            Err(e) => {
+                                error!("Self-update failed: {e:#}");
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
         }
         DLL_PROCESS_DETACH => {
             if crochet::is_enabled!(avs_ea3_boot_startup_hook) {
