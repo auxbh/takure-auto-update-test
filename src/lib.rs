@@ -9,6 +9,8 @@ mod types;
 mod updater;
 
 use std::thread;
+
+#[cfg(feature = "autoupdate")]
 use std::sync::{mpsc, Mutex, OnceLock};
 
 #[cfg(feature = "autoupdate")]
@@ -131,6 +133,7 @@ fn check_for_update() -> anyhow::Result<()> {
 
 // Signals the worker thread once call_original! has run, so network I/O never races AVS's
 // one-shot boot call and never blocks the boot thread itself
+#[cfg(feature = "autoupdate")]
 static BOOT_SIGNAL_TX: OnceLock<Mutex<mpsc::Sender<()>>> = OnceLock::new();
 
 #[cfg_attr(target_arch = "x86", crochet::hook("libavs-win32-ea3.dll", "XE592acd00008c"))]
@@ -142,6 +145,7 @@ unsafe extern "C" fn avs_ea3_boot_startup_hook(node: *const ()) -> i32 {
 
     let result = call_original!(node);
 
+    #[cfg(feature = "autoupdate")]
     if let Some(tx) = BOOT_SIGNAL_TX.get() {
         if let Ok(tx) = tx.lock() {
             let _ = tx.send(());
@@ -158,6 +162,7 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
         DLL_PROCESS_ATTACH => {
             unsafe { AllocConsole() };
             init_logger();
+            print_infos();
 
             // Set by a self-update reload; the boot event won't fire again this session
             #[cfg(feature = "autoupdate")]
@@ -165,7 +170,19 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             #[cfg(not(feature = "autoupdate"))]
             let reloaded_after_update = false;
 
-            let boot_rx = if !reloaded_after_update {
+            #[cfg(feature = "autoupdate")]
+            let self_update_enabled = !reloaded_after_update && CONFIGURATION.general.auto_update;
+            #[cfg(not(feature = "autoupdate"))]
+            let self_update_enabled = false;
+
+            if !reloaded_after_update && !self_update_enabled {
+                if let Err(err) = check_for_update() {
+                    error!("Unable to get update informations {:#}", err);
+                }
+            }
+
+            #[cfg(feature = "autoupdate")]
+            let boot_rx = if self_update_enabled {
                 let (tx, rx) = mpsc::channel();
                 let _ = BOOT_SIGNAL_TX.set(Mutex::new(tx));
                 Some(rx)
@@ -189,8 +206,6 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                     h.wait_and_close(1000);
                 }
 
-                print_infos();
-
                 #[cfg(feature = "autoupdate")]
                 if reloaded_after_update {
                     if let Err(err) = hook_init_from_cached_info() {
@@ -199,26 +214,19 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                     return;
                 }
 
+                #[cfg(feature = "autoupdate")]
                 if let Some(rx) = boot_rx {
                     let _ = rx.recv();
 
-                    #[cfg(feature = "autoupdate")]
-                    if CONFIGURATION.general.auto_update {
-                        match updater::self_update(&library_handle) {
-                            Ok(true) => {
-                                info!("Self-update successful. Reloading into new hook...");
-                                library_handle.free_and_exit_thread(1);
-                            }
-                            Ok(false) => {}
-                            Err(e) => {
-                                error!("Self-update failed: {e:#}");
-                            }
+                    match updater::self_update(&library_handle) {
+                        Ok(true) => {
+                            info!("Self-update successful. Reloading into new hook...");
+                            library_handle.free_and_exit_thread(1);
                         }
-                        return;
-                    }
-
-                    if let Err(err) = check_for_update() {
-                        error!("Unable to get update informations {:#}", err);
+                        Ok(false) => {}
+                        Err(e) => {
+                            error!("Self-update failed: {e:#}");
+                        }
                     }
                 }
             });
