@@ -1,3 +1,5 @@
+import argparse
+import getpass
 import hashlib
 import json
 import os
@@ -11,15 +13,47 @@ import tomllib
 CARGO_TOML_PATH = Path("./Cargo.toml")
 
 SIGNING_KEY_PATH = Path("./takure_signing.pfx")
-SIGNING_KEY_PASSWORD = os.environ["TAKURE_SIGNING_KEY_PASSWORD"]
+
+TARGETS = {
+    "takure_32": "i686-pc-windows-msvc",
+    "takure_64": "x86_64-pc-windows-msvc",
+}
 
 # Prebuilt, unsigned DLLs downloaded from the matrixed build job as artifacts
-ARTIFACTS = {
+CI_ARTIFACTS = {
     "takure_32": Path("artifacts/takure_32/takure.dll"),
     "takure_64": Path("artifacts/takure_64/takure.dll"),
 }
 
 DIST_FOLDER = Path("dist/")
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--local",
+    action="store_true",
+    help="Build both targets locally with cargo instead of using CI-downloaded artifacts",
+)
+args = parser.parse_args()
+
+if args.local:
+    for target in TARGETS.values():
+        print(f"[INFO] Building {target}...")
+        subprocess.run(
+            ["cargo", "build", "--release", "--target", target, "--features", "autoupdate"],
+            check=True,
+        )
+    ARTIFACTS = {
+        name: Path(f"target/{target}/release/takure.dll")
+        for name, target in TARGETS.items()
+    }
+else:
+    ARTIFACTS = CI_ARTIFACTS
+
+SIGNING_KEY_PASSWORD = os.environ.get("TAKURE_SIGNING_KEY_PASSWORD")
+if SIGNING_KEY_PASSWORD is None:
+    if not args.local:
+        raise SystemExit("[ERROR] TAKURE_SIGNING_KEY_PASSWORD is not set.")
+    SIGNING_KEY_PASSWORD = getpass.getpass("Signing key password: ")
 
 
 def sign_executable(key: Path, password: str, file: Path):
