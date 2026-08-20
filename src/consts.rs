@@ -10,9 +10,7 @@ pub const UPDATE_REPO: &str = "auxbh/takure-auto-update-test";
 #[cfg(feature = "autoupdate")]
 pub const UPDATE_MANIFEST_URL: &str = "https://auxbh.github.io/takure-auto-update-test/update.json";
 
-// Carries the game's model:dest:spec:rev:ext across a self-update reload. AVS's boot event
-// fires exactly once per game session and isn't retried, so a freshly reloaded instance has
-// no way to observe it again — this lets it redo the gate check from the same data instead.
+// Carries the game's model:dest:spec:rev:ext across a self-update reload
 #[cfg(feature = "autoupdate")]
 pub const GAME_INFO_ENV: &str = "TAKURE_EA3_NODE_INFO";
 

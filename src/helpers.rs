@@ -18,9 +18,6 @@ use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentThread};
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winnt::SYNCHRONIZE;
 
-// Used so the background thread that applies a staged update can wait for DllMain to
-// actually return (and release the loader lock) before calling FreeLibrary on ourselves —
-// doing that from within DllMain itself risks deadlock.
 #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
 pub struct ThreadHandle(HANDLE);
 

@@ -13,7 +13,7 @@ CARGO_TOML_PATH = Path("./Cargo.toml")
 SIGNING_KEY_PATH = Path("./takure_signing.pfx")
 SIGNING_KEY_PASSWORD = os.environ["TAKURE_SIGNING_KEY_PASSWORD"]
 
-# Prebuilt, unsigned DLLs downloaded from the matrixed build job as artifacts.
+# Prebuilt, unsigned DLLs downloaded from the matrixed build job as artifacts
 ARTIFACTS = {
     "takure_32": Path("artifacts/takure_32/takure.dll"),
     "takure_64": Path("artifacts/takure_64/takure.dll"),

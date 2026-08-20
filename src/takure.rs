@@ -19,8 +19,7 @@ pub fn hook_init(ea3_node: *const ()) -> Result<()> {
         Some((model, dest, spec, revision, ext))
     });
 
-    // Stash the raw node data so a self-update reload (which never sees another boot event
-    // this session) can redo this same gate check from crate::consts::GAME_INFO_ENV instead.
+    // Stash raw node data so a post-update reload can redo this gate check without a boot event
     #[cfg(feature = "autoupdate")]
     if let Some((model, dest, spec, revision, ext)) = &info {
         std::env::set_var(
@@ -32,10 +31,7 @@ pub fn hook_init(ea3_node: *const ()) -> Result<()> {
     init_from_game_info(info)
 }
 
-/// Re-runs the gate check + Tachi status check + `property_destroy_hook` install using the
-/// node data a previous instance (in this same game session) captured before self-updating.
-/// AVS's boot event doesn't fire again for a reloaded module, so this is the only way a
-/// post-update instance gets initialized.
+// Re-runs the gate check using cached node data, since a reloaded module gets no boot event
 #[cfg(feature = "autoupdate")]
 pub fn hook_init_from_cached_info() -> Result<()> {
     let info = std::env::var(crate::consts::GAME_INFO_ENV).ok().and_then(|s| {

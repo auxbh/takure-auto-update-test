@@ -51,7 +51,7 @@ pub struct ReplaceArgs {
     pub new: [u16; 32767],
 }
 
-/// SAFETY: This function *must* only be called when the addresses for the function have been filled in.
+/// SAFETY: This function *must* only be called when the addresses for the function have been filled in
 #[allow(non_snake_case)]
 #[link_section = ".rtext"]
 pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void) -> u32 {
@@ -64,12 +64,9 @@ pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void)
     let HeapFree = std::mem::transmute::<PROC, HeapFreeFn>(HEAP_FREE_PTR);
     let Sleep = std::mem::transmute::<PROC, SleepFn>(SLEEP_PTR);
 
-    // Wait for the old library to be freed
+    // Wait for the old library to unload. Poll tightly, not e.g. once a second — AVS's
+    // one-shot boot call can land in this gap and there's no hook active to catch it
     let mut filename = 0;
-
-    // Poll tightly (not e.g. once a second) — the boot hook is completely absent for the
-    // entire span between the old module actually unloading and this loop noticing and
-    // reloading the new one, and AVS's one-shot boot call can land in that gap at any time.
     loop {
         let result = GetModuleFileNameA((*args).module, &mut filename, 1);
 

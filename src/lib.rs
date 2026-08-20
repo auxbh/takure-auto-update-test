@@ -9,8 +9,6 @@ mod types;
 mod updater;
 
 use std::thread;
-
-#[cfg(feature = "autoupdate")]
 use std::sync::{mpsc, Mutex, OnceLock};
 
 #[cfg(feature = "autoupdate")]
@@ -96,24 +94,43 @@ fn init_logger() {
 }
 
 fn print_infos() {
-    info!(
-        "Starting Takure v{}-{} by auxbh",
-        env!("CARGO_PKG_VERSION"),
-        option_env!("VERGEN_GIT_DESCRIBE").unwrap_or("unknown")
-    );
+    let describe = option_env!("VERGEN_GIT_DESCRIBE").unwrap_or("unknown");
+    if describe.starts_with('v') {
+        info!("Starting Takure {} by auxbh", describe);
+    } else {
+        info!("Starting Takure v{}-{} by auxbh", env!("CARGO_PKG_VERSION"), describe);
+    }
 
     if let Some(build_date) = option_env!("VERGEN_BUILD_DATE") {
         info!("Build date: {}", build_date);
     }
 }
 
-// Set right before crochet::enable!(avs_ea3_boot_startup_hook) in DllMain, so it's guaranteed
-// present by the time AVS could possibly reach the boot hook. Lets the boot hook wake the
-// worker thread waiting to self-update only *after* call_original! has run — self-updating
-// needs unbounded network time, so it must never run before the hook is installed (it would
-// race AVS's one-shot boot call) nor from the boot thread itself (killing that thread, even
-// after call_original! returns, takes down whatever AVS still needs it for).
-#[cfg(feature = "autoupdate")]
+// Notify-only fallback used when self-update isn't running (feature off or auto_update disabled)
+fn check_for_update() -> anyhow::Result<()> {
+    let describe = option_env!("VERGEN_GIT_DESCRIBE").unwrap_or("unknown");
+    if describe.contains('-') {
+        return Ok(());
+    }
+
+    let latest_tag = helpers::request_agent()
+        .get("https://api.github.com/repos/auxbh/takure/releases/latest")
+        .call()?
+        .into_json::<serde_json::Value>()?
+        .get("tag_name")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .ok_or(anyhow::anyhow!("Could not get latest release tag"))?;
+
+    if describe != latest_tag && !cfg!(debug_assertions) {
+        info!("A newer version of Takure is available at https://github.com/auxbh/takure/releases/latest");
+    }
+
+    Ok(())
+}
+
+// Signals the worker thread once call_original! has run, so network I/O never races AVS's
+// one-shot boot call and never blocks the boot thread itself
 static BOOT_SIGNAL_TX: OnceLock<Mutex<mpsc::Sender<()>>> = OnceLock::new();
 
 #[cfg_attr(target_arch = "x86", crochet::hook("libavs-win32-ea3.dll", "XE592acd00008c"))]
@@ -125,7 +142,6 @@ unsafe extern "C" fn avs_ea3_boot_startup_hook(node: *const ()) -> i32 {
 
     let result = call_original!(node);
 
-    #[cfg(feature = "autoupdate")]
     if let Some(tx) = BOOT_SIGNAL_TX.get() {
         if let Ok(tx) = tx.lock() {
             let _ = tx.send(());
@@ -143,14 +159,12 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             unsafe { AllocConsole() };
             init_logger();
 
-            // A self-update reload sets this before exiting; AVS's boot event won't fire
-            // again for the reloaded module, so this instance skips waiting for it.
+            // Set by a self-update reload; the boot event won't fire again this session
             #[cfg(feature = "autoupdate")]
             let reloaded_after_update = std::env::var(consts::GAME_INFO_ENV).is_ok();
             #[cfg(not(feature = "autoupdate"))]
             let reloaded_after_update = false;
 
-            #[cfg(feature = "autoupdate")]
             let boot_rx = if !reloaded_after_update {
                 let (tx, rx) = mpsc::channel();
                 let _ = BOOT_SIGNAL_TX.set(Mutex::new(tx));
@@ -170,10 +184,7 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             let thread_handle = ThreadHandle::duplicate_current_thread_handle();
 
             thread::spawn(move || {
-                // Wait until DllMain returns and the loader lock is released before doing
-                // any real work, otherwise self-updating (which needs to spawn its own
-                // thread and touch the filesystem) can deadlock. The boot hook is already
-                // installed by this point regardless, so this wait can't cause a missed boot.
+                // Avoid deadlock: wait for DllMain to release the loader lock first
                 if let Ok(h) = thread_handle {
                     h.wait_and_close(1000);
                 }
@@ -188,12 +199,10 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                     return;
                 }
 
-                #[cfg(feature = "autoupdate")]
                 if let Some(rx) = boot_rx {
-                    // Blocks until the boot hook has captured game info, installed
-                    // property_destroy_hook, and let call_original! run to completion.
                     let _ = rx.recv();
 
+                    #[cfg(feature = "autoupdate")]
                     if CONFIGURATION.general.auto_update {
                         match updater::self_update(&library_handle) {
                             Ok(true) => {
@@ -205,6 +214,11 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                                 error!("Self-update failed: {e:#}");
                             }
                         }
+                        return;
+                    }
+
+                    if let Err(err) = check_for_update() {
+                        error!("Unable to get update informations {:#}", err);
                     }
                 }
             });

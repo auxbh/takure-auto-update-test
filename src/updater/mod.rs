@@ -173,8 +173,7 @@ fn expected_sha256(info: &UpdateInformation) -> &str {
     &info.sha256_64
 }
 
-/// Checks if the hook has a newer version. Returns true if update was successful
-/// and the hook should uninject itself so a newer version can load in.
+// Returns true if an update was applied and the hook should uninject itself
 #[allow(clippy::result_large_err)]
 pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     let module_filename =
@@ -266,18 +265,8 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     }
 
     debug!("Starting update sequence");
-    // You know stuff is going to be cursed when the unsafe block is ~120 lines long.
-    //
-    // TL;DR: There's a function that waits until the current hook has been unloaded,
-    // then replaces the old hook with the new hook, and loads in the new hook.
-    //
-    // This is achieved by linking that function alongside the required functions in a different
-    // code section (".rtext"), setting references for those functions, then copying out
-    // that entire section to a different memory region so it can keep executing when the
-    // old hook is unloaded.
-    //
-    // Thanks to DJTRACKERS and their fervidex hook for the approach, and beer-psi's saekawa
-    // for demonstrating it.
+    // Copies replace_with_new_library (and the kernel32 pointers it needs) out of the .rtext
+    // section into standalone memory, then runs it there so it survives this DLL unloading
     unsafe {
         let kernel32 =
             dlopen2::raw::Library::open("kernel32.dll").expect("kernel32 missing on windows?");
@@ -372,7 +361,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
 
         (*heap).module = module.handle();
 
-        // Prepend "\\?\" to the path to prevent path length limits.
+        // Prepend "\\?\" to the path to prevent path length limits
         (&mut (*heap).old)[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
         (&mut (*heap).new)[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
         for (i, c) in module_filename.encode_utf16().enumerate() {

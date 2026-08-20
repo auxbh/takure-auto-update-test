@@ -3,15 +3,12 @@ use vergen::EmitBuilder;
 
 fn main() -> Result<(), Box<dyn Error>> {
     EmitBuilder::builder()
-        .git_describe(false, false, None)
+        .git_describe(false, true, None)
         .git_sha(false)
         .build_date()
         .emit()?;
 
-    // Makes it possible to write function pointers to the .rtext section, used
-    // by the autoupdate feature to keep executing code after the old DLL unloads.
-    // MSVC-specific; other linkers will leave .rtext read-only and the self-update
-    // will crash when it runs, but the rest of the hook still works fine.
+    // Makes it possible to write function pointers to the .rtext section
     if std::env::var("TARGET").unwrap_or_default().ends_with("msvc") {
         println!("cargo::rustc-link-arg=/SECTION:.rtext,RW");
     } else {
