@@ -129,4 +129,4 @@ update_manifest = {
 with (DIST_FOLDER / "update.json").open("w", encoding="utf-8") as f:
     json.dump(update_manifest, f, ensure_ascii=False, indent=4)
 
-print("[INFO] Done. Release assets and update.json are in dist/.")
+print("[INFO] Done. Release assets and update.json are in dist/")

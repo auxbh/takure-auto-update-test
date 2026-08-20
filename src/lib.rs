@@ -178,7 +178,7 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             if !reloaded_after_update && !self_update_enabled {
                 thread::spawn(|| {
                     if let Err(err) = check_for_update() {
-                        error!("Unable to get update informations {:#}", err);
+                        error!("Unable to get update informations: {:#}", err);
                     }
                 });
             }

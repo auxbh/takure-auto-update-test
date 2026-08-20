@@ -73,7 +73,7 @@ pub enum SelfUpdateError {
     #[snafu(display("Invalid NT signature"))]
     InvalidNtSignature,
 
-    #[snafu(display("Updater code section not found."))]
+    #[snafu(display("Updater code section not found"))]
     NoUpdaterCodeSection,
 
     #[snafu(display("Failed to allocate memory for update"))]
@@ -85,25 +85,25 @@ pub enum SelfUpdateError {
     #[snafu(display("Could not execute updater code: {errno}"))]
     FailedCreateThread { errno: u32 },
 
-    #[snafu(display("Failed to request update information."))]
+    #[snafu(display("Failed to request update information"))]
     FailedRequestingUpdate { source: ureq::Error },
 
-    #[snafu(display("Invalid update information."))]
+    #[snafu(display("Invalid update information"))]
     InvalidUpdateInformation { source: io::Error },
 
-    #[snafu(display("Could not download updated hook."))]
+    #[snafu(display("Could not download updated hook"))]
     FailedDownloadingUpdate { source: io::Error },
 
-    #[snafu(display("Could not read the downloaded release archive."))]
+    #[snafu(display("Could not read the downloaded release archive"))]
     InvalidArchive { source: zip::result::ZipError },
 
-    #[snafu(display("The downloaded release archive did not contain takure.dll."))]
+    #[snafu(display("The downloaded release archive did not contain takure.dll"))]
     MissingDllInArchive,
 
-    #[snafu(display("Could not write updated hook to file."))]
+    #[snafu(display("Could not write updated hook to file"))]
     FailedWritingUpdate { source: io::Error },
 
-    #[snafu(display("SHA-256 checksum mismatch."))]
+    #[snafu(display("SHA-256 checksum mismatch"))]
     InvalidChecksum,
 
     #[snafu(display("Could not verify signature: {source:#}"))]
@@ -112,22 +112,22 @@ pub enum SelfUpdateError {
     #[snafu(display("Failed to get digital signature of the update: {source:#?}"))]
     FailedGettingPubkey { source: GetSignaturePubkeyError },
 
-    #[snafu(display("Public key mismatched."))]
+    #[snafu(display("Public key mismatched"))]
     InvalidPubkey,
 }
 
 #[derive(Snafu, Debug)]
 pub enum VerifySignatureError {
-    #[snafu(display("Signature verification was disabled by a local policy."))]
+    #[snafu(display("Signature verification was disabled by a local policy"))]
     VerificationDisabledByPolicy,
 
-    #[snafu(display("No signatures found."))]
+    #[snafu(display("No signatures found"))]
     NoSignature,
 
-    #[snafu(display("The signature failed to verify."))]
+    #[snafu(display("The signature failed to verify"))]
     SignatureBadDigest,
 
-    #[snafu(display("The signature was explicitly distrusted."))]
+    #[snafu(display("The signature was explicitly distrusted"))]
     ExplicitlyDistrusted,
 
     #[snafu(display("An unknown validation error occured: {errno}"))]
@@ -151,7 +151,7 @@ pub enum GetSignaturePubkeyError {
     #[snafu(display("Could not look up certificate in certificate store: {errno}"))]
     CertificateInStore { errno: u32 },
 
-    #[snafu(display("Could not read public key."))]
+    #[snafu(display("Could not read public key"))]
     ReadPubkey { source: io::Error },
 }
 
@@ -198,7 +198,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     debug!("remote commit: {}", response.commit);
 
     if response.commit == GIT_SHA {
-        info!("Already up-to-date.");
+        info!("Already up-to-date");
 
         return Ok(false);
     }
@@ -463,7 +463,7 @@ fn verify_signature(file: &str) -> Result<(), VerifySignatureError> {
 }
 
 fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> {
-    debug!("Getting public key of {file}.");
+    debug!("Getting public key of {file}");
 
     let file_osstr = U16CString::from_str_truncate(file);
     let mut cert_store: HCERTSTORE = ptr::null_mut();
