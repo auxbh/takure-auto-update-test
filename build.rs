@@ -15,5 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("cargo::warning=Not targeting MSVC: the .rtext section will not be writable, which will cause a crash if a self-update is triggered.");
     }
 
+    winresource::WindowsResource::new().compile()?;
+
     Ok(())
 }

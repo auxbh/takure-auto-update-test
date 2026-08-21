@@ -45,3 +45,4 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 vergen = { version = "8.0.0", features = ["build", "cargo", "git", "gitcl"] }
+winresource = "0.1"
